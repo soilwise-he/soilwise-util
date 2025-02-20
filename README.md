@@ -1,6 +1,14 @@
 
 
-# API to advertise harvested feeds
+# API to browse through harvested feeds
+
+News feeds of the soil mission projects are harvested into a database, this API enables to browse through the feeds. Feeds are ordered by date.
+
+## Usage
+
+Navigate to /docs to see interactive documentation (swagger)
+
+Use params `limit` and `offset` to paginate through the results
 
 ## Run locally
 

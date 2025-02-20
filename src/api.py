@@ -58,14 +58,14 @@ async def fetch_data(query: str, values: dict = {}):
 
 # Endpoint to retrieve data with redirection statuses
 @app.get('/items', response_model=List[FeedResponse])
-async def get_items():
+async def get_items(offset: int = 0, limit: int = 10):
     query = f"""
         SELECT *
         FROM {schema}.feeds 
         ORDER by published desc
-        limit 10
+        limit :limit offset :offset
     """
-    data = await fetch_data(query=query)
+    data = await fetch_data(query=query,values={'limit':limit,'offset':offset})
     return data
 
 # Start the application
