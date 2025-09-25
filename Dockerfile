@@ -1,5 +1,5 @@
 
-FROM harbor.containers.wurnet.nl/proxy-cache/library/python:3.8-slim-buster
+FROM harbor.containers.wurnet.nl/proxy-cache/library/python:3.10.18-slim-bookworm
 LABEL maintainer="genuchten@yahoo.com"
 
 RUN apt-get update && apt-get install --yes \
