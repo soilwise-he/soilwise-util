@@ -60,11 +60,16 @@ async def fetch_data(query: str, values: dict = {}):
 # Endpoint to retrieve data with redirection statuses
 @app.get('/items', response_model=List[FeedResponse])
 async def get_items(offset: int = 0, limit: int = 10, keywords: str = '', project: str = ''):
-    query = f"""SELECT * FROM {schema}.feeds f left join {schema}.projects p on f.project = p.code where true """ # join on code because it is always populated
+    query = f"SELECT * FROM {schema}.feeds f left join {schema}.projects p on f.project = p.code where " # join on code because it is always populated
     if keywords != '':
-        query += "and replace(lower(f.tags), ' ','') like :kw "  
+        query += "replace(lower(f.tags), ' ','') like :kw "  
+    else:
+        query += ":kw <> 'ex0'"
+
     if project != '':
-        query += 'and (p.grantnr = :prj or p.code = :prj)' 
+        query += "and (p.grantnr = :prj or lower(p.code) = lower(:prj)) " 
+    else:
+        query += "and :prj <> 'ex0' " 
     query += """ORDER by published desc limit :limit offset :offset"""
     data = await fetch_data(query=query,values={'limit':limit,'offset':offset,'kw':f'%{keywords}%','prj':project})
     return data
@@ -124,8 +129,8 @@ async def status(item):
                         # see if in Datacite
                         req2 = f"https://doi.org/{item.split('doi.org/').pop()}"
                         try:
-                            res2 = requests.get(req2,headers={'accept':'application/x-bibtex'}).text()
-                            print(res2)
+                            res2 = requests.get(req2,headers={'accept':'application/x-bibtex'})
+                            resp.append(f"Record is bibtex; {res2.text()}") 
                         except Exception as e:
                             resp.append(f"Error query bibtex, {e}") 
                 else:
