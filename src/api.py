@@ -168,22 +168,24 @@ async def status(item, request: Request):
 
             # is id in data.europa.eu?  
             try:
-                quri = f"https://data.europa.eu/api/hub/search/datasets/{item.split('/').pop().split('?')[0]}"
-                d = requests.get(req,headers={'accept':'application/json'}).json()
-                # does metadata include keyword soil?
-                if d and d.get('result'):
-                    for kw in d.get('result').get('keywords',[]):
-                        if "soil" in kw.get('label','') or "soil" in kw.get('id',''):
-                            resp.append(f"record is in data.europa.eu, and has a `soil` keyword, it should be in soilwise")
-                        else:  
-                            resp.append(f"record is in data.europa.eu, but does <b>not</b> have a `soil` keyword")
-                else:
-                    resp.append(f"record not in data.europa.eu")   
+                mid = quote_plus(item.split('/').pop().split('?')[0])
+                if mid not in [None,'']:
+                    quri = f"https://data.europa.eu/api/hub/search/datasets/{mid}"
+                    d = requests.get(quri,headers={'accept':'application/json'}).json()
+                    # does metadata include keyword soil?
+                    if d and d.get('result'):
+                        for kw in d.get('result').get('keywords',[]):
+                            if "soil" in kw.get('label','') or "soil" in kw.get('id',''):
+                                resp.append(f"record {mid} is in data.europa.eu, and has a `soil` keyword, it should be in soilwise")
+                            else:  
+                                resp.append(f"record {mid} is in data.europa.eu, but does <b>not</b> have a `soil` keyword")
+                    else:
+                        resp.append(f"record {mid} not in data.europa.eu")   
             except Exception as e:
                 resp.append(f"Error while querying OpenAire, {e}")      
             # is id in cordis?
 
-            # Insert some data.
+            # Insert a log of this case
             query = "INSERT INTO harvest.doi_validate_history(date, ip, doi, msg) VALUES (LOCALTIMESTAMP, :ip, :doi, :msg)"
             values = {"doi": quote(item), "ip": ip ,"msg": ";".join(resp) }
             await database.execute(query=query, values=values)
