@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from dotenv import load_dotenv
 from databases import Database
 from typing import List, Optional
@@ -45,6 +45,15 @@ class FeedResponse(BaseModel):
     image: Optional[str] = None 
     author: Optional[str] = None 
     tags: Optional[str] = None 
+class ProjectResponse(BaseModel):
+    code: Optional[str] = None
+    title: Optional[str] = None 
+    abstract: Optional[str] = None 
+    website: Optional[str] = None 
+    url: Optional[str] = None 
+    grantnr: Optional[str] = None 
+
+
 
 # Helper function to execute SQL query and fetch results
 async def fetch_data(query: str, values: dict = {}):
@@ -56,6 +65,22 @@ async def fetch_data(query: str, values: dict = {}):
     except Exception as e:
         logging.error(f"Database query failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database query failed")
+
+# Endpoint to fetch projects
+@app.get('/projects', response_model=List[ProjectResponse])
+async def get_projects():
+    query = f"SELECT code,title,grantnr,favicon FROM {schema}.projects ORDER by grantnr"
+    data = await fetch_data(query=query,values={})
+    return data
+
+@app.get('/project/{item}', response_model=ProjectResponse)
+async def get_project(item):
+    query = f"SELECT code,title,grantnr,abstract,url,website,favicon FROM {schema}.projects where grantnr = :item"
+    data = await fetch_data(query=query,values={'item': item})
+    if data:
+        return data
+    else:
+        raise HTTPException(status_code=404, detail="Project not found")
 
 # Endpoint to retrieve data with redirection statuses
 @app.get('/items', response_model=List[FeedResponse])
@@ -76,8 +101,9 @@ async def get_items(offset: int = 0, limit: int = 10, keywords: str = '', projec
 
 # Endpoint to get status of a doi
 @app.get('/status/{item:path}', response_model=List[str])
-async def status(item):
+async def status(item, request: Request):
     resp = [f"Test item {quote(item)}"]
+    ip = request.client.host
     if item:
         
         # is id in soilwise?
@@ -86,7 +112,7 @@ async def status(item):
         qry2 = """SELECT identifier,error from harvest.items WHERE identifier like :item or identifier like :splititem"""
         d2 = await fetch_data(query=qry2, values={'item': item, 'splititem': '%'+(item.split('/').pop() or 'random-non-matching-string')})
         if len(d1) > 0:
-            resp.append(f"Record {d1[0][0]} exists in Soilwise")
+            resp.append(f"Record <a href=https://repository.soilwise-he.eu/cat/collections/metadata:main/items/{d1[0][0]}>{d1[0][0]}</a> exists in Soilwise")
         elif len(d2) > 0:
             resp.append(f"Record {d2[0][0]} was harvested but did not make it to the final catalogue; {d2[0][1]}")
         else:
@@ -113,42 +139,57 @@ async def status(item):
                                     code = r.get('code',{}).get('$','')
                                     acronym = r.get('acronym',{}).get('$','')
                             if code == '':
-                                resp.append("Record is in OpenAire, but no relevant HE grantnr has been found")
+                                resp.append("Record is in OpenAire, but no relevant HE grantnr has been found. Contact the authors to update their funding reference.")
                             else:
                                 # check if grantnr is in list
                                 qry3 = """SELECT grantnr, code FROM harvest.projects WHERE grantnr = :item"""
                                 d3 = await fetch_data(query=qry3, values={'item': code})
                                 if len (d3) > 0:
-                                    resp.append(f"Record is included in OpenAire, and is related to project {code}:{acronym}, that project is tagged by ESDAC as being soil related")
+                                    resp.append(f"Record is included in OpenAire, and is related to project {code}:{acronym}, that project is tagged by ESDAC as being soil related, please contact Soilwise about this issue.")
                                 else:    
-                                    resp.append(f"Record is included in OpenAire, and is related to project {code}:{acronym}, however that project is not tagged by ESDAC as being soil related")
+                                    resp.append(f"Record is included in OpenAire, and is related to project {code}:{acronym}, however that project is not tagged by ESDAC as being soil related. Let us know if you think this project should be included.")
                         else:
                             resp.append(f"Record has no funding relations") 
                     else:
-                        resp.append(f"Record is not in OpenAire")
+                        resp.append(f"Record is not in OpenAire. ")
                         # see if in Datacite
                         req2 = f"https://doi.org/{item.split('doi.org/').pop()}"
                         try:
                             res2 = requests.get(req2,headers={'accept':'application/x-bibtex'})
-                            resp.append(f"Record is bibtex; {res2.text()}") 
+                            resp.append(f"Record in bibtex; {res2.text()}") 
                         except Exception as e:
-                            resp.append(f"Error query bibtex, {e}") 
+                            resp.append(f"Record not in bibtex") 
                 else:
                     resp.append(f"No OpenAire result") 
                 
             except Exception as e: 
                 resp.append(f"Error while querying OpenAire, {e}")
         
+
+            # is id in data.europa.eu?  
+            try:
+                quri = f"https://data.europa.eu/api/hub/search/datasets/{item.split('/').pop().split('?')[0]}"
+                d = requests.get(req,headers={'accept':'application/json'}).json()
+                # does metadata include keyword soil?
+                if d and d.get('result'):
+                    for kw in d.get('result').get('keywords',[]):
+                        if "soil" in kw.get('label','') or "soil" in kw.get('id',''):
+                            resp.append(f"record is in data.europa.eu, and has a `soil` keyword, it should be in soilwise")
+                        else:  
+                            resp.append(f"record is in data.europa.eu, but does <b>not</b> have a `soil` keyword")
+                else:
+                    resp.append(f"record not in data.europa.eu")   
+            except Exception as e:
+                resp.append(f"Error while querying OpenAire, {e}")      
+            # is id in cordis?
+
+            # Insert some data.
+            query = "INSERT INTO harvest.doi_validate_history(date, ip, doi, msg) VALUES (LOCALTIMESTAMP, :ip, :doi, :msg)"
+            values = {"doi": quote(item), "ip": ip ,"msg": ";".join(resp) }
+            await database.execute(query=query, values=values)
+
     return resp
 
-    # is id in data.europa.eu?  
-
-    # quri = f"https://data.europa.eu/api/hub/search/datasets/{}"
-    #try:
-    #            d = requests.get(req,headers={'accept':'application/json'}).json()
-
-        # does metadata include keyword soil?
-    # is id in cordis?
 
 
 
