@@ -6,3 +6,6 @@
 /pyvenv.cfg
 /CACHEDIR.TAG
 /src/.env
+/include/
+/share/
+/src/__pycache__/

@@ -8,3 +8,4 @@ asyncpg
 linkchecker
 databases
 python-dotenv
+rdflib
