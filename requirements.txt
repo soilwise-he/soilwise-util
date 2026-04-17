@@ -3,9 +3,8 @@ beautifulsoup4
 fastapi
 pydantic
 uvicorn
-pandas
 asyncpg
-linkchecker
 databases
 python-dotenv
-rdflib
+python-multipart
+httpx
