@@ -1,4 +1,4 @@
-
+[![DOI](https://zenodo.org/badge/1139890951.svg)](https://doi.org/10.5281/zenodo.19708262)
 
 # SOILWISE Util
 
