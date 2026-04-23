@@ -180,17 +180,17 @@ async def status(item, request: Request):
         
 
         if len(d1) > 0:
-            resp.append(f"- Record <a href=''{REC_URI}{d1[0][0]}>{d1[0][0]}</a> exists in Soilwise")
+            resp.append(f"Record <a href=''{REC_URI}{d1[0][0]}>{d1[0][0]}</a> exists in Soilwise")
         elif len(d3) > 0:
-            resp.append(f"""- Record {item} seems a alternate identification (or version) 
+            resp.append(f"""Record {item} seems a alternate identification (or version) 
                         of the existing record <a href={REC_URI}{d3[0][0]}>{d3[0][0]}</a>""")
         elif len(d2) > 0:
-            resp.append(f"- Record {d2[0][0]} was harvested but did not make it to the final catalogue (yet)")
+            resp.append(f"Record {d2[0][0]} was harvested but did not make it to the final catalogue (yet)")
         else:
             resp.append("Record not (yet) available in Soilwise")    
             
             # is id in openaire?
-            req = f"api.openaire.eu/graph/v2/researchProducts?pid={item.split('doi.org/').pop()}"
+            req = f"https://api.openaire.eu/graph/v2/researchProducts?pid={item.split('doi.org/').pop()}"
             try:
                 res = requests.get(req, headers={'accept':'application/json'})
                 res2 = res.json()
@@ -222,6 +222,19 @@ async def status(item, request: Request):
 
                 else:
                     resp.append(f"Record is not in OpenAire. ")
+                    if 'zenodo' in item:
+                        resp.append(f"Record identifier contains `zenodo`")
+                        req = f"https://zenodo.org/api/records/{item.split('zenodo.').pop()}"
+                        try:
+                            res = requests.get(req, headers={'accept':'application/json'})
+                            res2 = res.json()
+                            if res2 and 'metadata' in res2:
+                                resp.append(f"Record does exist in Zenodo, it may be indexed yet in OpenAire or indexing failed.")
+                            else:
+                                resp.append(f"Record is not available in Zenodo")
+                        except Exception as e: 
+                            resp.append(f"A query request to zenodo with that identifier failed, {e}")
+
                     # see if in Datacite
                     if validate_doi(item):
                         resp.append("Record is a valid DOI") 
@@ -232,13 +245,7 @@ async def status(item, request: Request):
                 resp.append(f"Error while processing DOI, {e}")
             
             resp.append(f"""Please notify the SoilWise team if you think this resource should
-                        be included in SoilWise.<br/>
-                        <form action="{ROOT_URL}/doi/suggest">
-                        DOI: <input type=text name=doi /><br/>
-                        Name: <input type=text name=name /><br/>
-                        Email: <input type=text name=email /><br/>
-                        <input type=submit /></form>
-                        """)
+                        be included in SoilWise.""")
 
 
             # is id in data.europa.eu?  
