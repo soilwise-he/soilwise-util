@@ -7,7 +7,7 @@ from typing import List, Optional, Any
 from typing_extensions import Annotated
 from pydantic import BaseModel
 from datetime import datetime
-import asyncpg, requests
+import asyncpg, requests, asyncio
 from requests.auth import HTTPDigestAuth
 import logging
 import os, httpx
@@ -42,13 +42,20 @@ app = FastAPI(
     root_path=rootpath
 )
 
+@app.get("/health/ready")
+async def readiness():
+    if not _db_connected:
+        raise HTTPException(status_code=503, detail="Database not ready")
+    return {"status": "ok"}
+
 @app.on_event("startup")
 async def startup():
-    await database.connect()
+    asyncio.create_task(connect_with_retry())
 
 @app.on_event("shutdown")
 async def shutdown():
-    await database.disconnect()
+    if database.is_connected:
+        await database.disconnect()
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,6 +65,9 @@ app.add_middleware(
     allow_headers=["*"]
 )
 logger = logging.getLogger(__name__)
+
+_db_connected = False
+
 
 # Define response models
 class FeedResponse(BaseModel):
@@ -83,6 +93,21 @@ class RecordResponse(BaseModel):
     source: Optional[str] = None 
     project: Optional[str] = None
 
+async def connect_with_retry():
+    global _db_connected
+
+    backoff = 1
+    while True:
+        try:
+            await database.connect()
+            _db_connected = True
+            logger.info("Database connected")
+            return
+        except Exception as e:
+            _db_connected = False
+            logger.warning(f"Database connection failed: {e}. Retrying in {backoff}s")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)  # cap backoff
 
 # Helper function to execute SQL query and fetch results
 async def fetch_data(query: str, values: dict = {}):
