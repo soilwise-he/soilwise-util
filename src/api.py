@@ -93,6 +93,13 @@ class RecordResponse(BaseModel):
     source: Optional[str] = None 
     project: Optional[str] = None
 
+class AugmentResponse(BaseModel):
+    property: Optional[str] = None
+    original: Optional[str] = None
+    target: Optional[str] = None
+    process: Optional[str] = None
+    date: Optional[datetime] = None
+
 async def connect_with_retry():
     global _db_connected
 
@@ -341,13 +348,37 @@ async def handle_form(
 
 
 ## version history 
-@app.get('/history/{item}', response_model=List[RecordResponse])
-async def get_record_history(item):
+@app.get('/history/{item:path}', response_model=List[RecordResponse])
+async def get_record_history(item: str):
     query = f"""SELECT identifier, itemtype, 
         resultobject, insert_date as date, title, source, project 
         FROM harvest.items where identifier=:id"""
     data = await fetch_data(query=query,values={ "id": item})
+    print('dt',len(data))
     return data
+
+## version history 
+@app.get('/augments/{item:path}', response_model=List[AugmentResponse])
+async def get_record_augments(item: str):
+    query = f"""SELECT distinct on (a.property) a.property,
+                    a.value as target, 
+                    a.process, 
+                    a.date
+                FROM metadata.augments a 
+                WHERE a.record_id=:id
+                ORDER by a.property, a.date desc"""
+    _data = await fetch_data(query=query,values={"id": item})
+    data = [AugmentResponse(**row) for row in _data]
+    for d in data:
+        try:
+            qry2 = f"""SELECT {d.property} FROM metadata.records where identifier=:id"""
+            data2 = await database.fetch_all(query=qry2,values={"id": item})
+            d.original = data2[0][0] if data2 and len(data2) > 0 else None
+        except Exception as e:
+            None # specific augment column does not exist
+
+    return data
+
 
 
 allowed_languages = os.environ.get("TR_ALLOWED_LANGUAGES") or '*'
