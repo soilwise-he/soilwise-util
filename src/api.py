@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from dotenv import load_dotenv
 from databases import Database
 from typing import List, Optional, Any
@@ -10,7 +10,7 @@ from datetime import datetime
 import asyncpg, requests, asyncio
 from requests.auth import HTTPDigestAuth
 import logging
-import os, httpx
+import os, httpx, re
 from urllib.parse import quote_plus, quote
 
 
@@ -42,11 +42,15 @@ app = FastAPI(
     root_path=rootpath
 )
 
-@app.get("/health/ready")
+@app.get("/health/ready", summary="Readiness check for SoilWise Utility API", description="Check if the SoilWise API is ready to handle requests by verifying database connectivity.")
 async def readiness():
     if not _db_connected:
         raise HTTPException(status_code=503, detail="Database not ready")
     return {"status": "ok"}
+
+@app.get('/', response_class=HTMLResponse, summary="Welcome to the SoilWise Utility API", description="Welcome endpoint for the SoilWise Utility API, providing a brief introduction and links to documentation.")
+async def index_loader():
+    return '<html><head><meta http-equiv="refresh" content="0; url=./docs"></head></html>'
 
 @app.on_event("startup")
 async def startup():
@@ -116,6 +120,11 @@ async def connect_with_retry():
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)  # cap backoff
 
+# Helper function to validate email by pattern
+def validate_email(email: str) -> bool:
+    pattern = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+    return re.match(pattern, email) is not None
+
 # Helper function to execute SQL query and fetch results
 async def fetch_data(query: str, values: dict = {}):
     try:
@@ -134,7 +143,10 @@ async def get_projects():
     data = await fetch_data(query=query,values={})
     return data
 
-@app.get('/project/{item}', response_model=ProjectResponse)
+@app.get('/project/{item}', 
+         response_model=ProjectResponse, 
+         summary="Get project details by grant number or code", 
+         description="Provide either the grant number or the project code to retrieve details about a specific project.")
 async def get_project(item):
     query = f"SELECT code,title,grantnr,abstract,website,favicon FROM {schema}.projects where grantnr = :item"
     data = await fetch_data(query=query,values={'item': str(item)})
@@ -146,9 +158,12 @@ async def get_project(item):
         raise HTTPException(status_code=404, detail="Project not found")
 
 # Endpoint to retrieve data with redirection statuses
-@app.get('/feeds/items', response_model=List[FeedResponse])
+@app.get('/feeds/items', 
+         response_model=List[FeedResponse],
+         summary="Retrieve news feeds from Soil Mission projects with optional filtering",
+         description="""Retrieve feed items with optional filtering by keywords and project.""")
 async def get_items(offset: int = 0, limit: int = 10, keywords: str = '', project: str = ''):
-    query = f"SELECT * FROM {schema}.feeds f left join {schema}.projects p on f.project = p.code where " # join on code because it is always populated
+    query = f"SELECT * FROM harvest.feeds f left join harvest.projects p on f.project = p.code where " # join on code because it is always populated
     if keywords != '':
         query += "replace(lower(f.tags), ' ','') like :kw "  
     else:
@@ -167,14 +182,12 @@ class JsonLdPayload(BaseModel):
 
 DOI_URL = "https://doi.org/{}"
 
+# Helper function to validate DOI existence
 async def validate_doi(doi: str) -> bool:
-
     url = DOI_URL.format(doi.split('doi.org/').pop())
-
     headers = {
         "Accept": "application/x-bibtex"
     }
-
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
             resp = await client.get(url, headers=headers)
@@ -192,32 +205,39 @@ async def validate_doi(doi: str) -> bool:
             return False
 
 # Endpoint to get status of a doi
-@app.get('/pid/status/{item:path}', response_model=List[str])
+@app.get('/pid/status/{item:path}', 
+         response_model=List[str],
+         summary="Check the status/availability of a DOI in relation to SoilWise selection criteria",
+         description="Check the status of a DOI in relation to SoilWise selection criteria, including its presence in SoilWise, OpenAire, and its validity as a DOI.")
 async def status(item, request: Request):
     resp = [f"Test item {quote(item)}"]
     ip = request.client.host
     if item:
         
         # is id in soilwise?
-        qry1 = """SELECT identifier from metadata.records
-            WHERE identifier like :item or identifier like :splititem"""
+        qry1 = """SELECT identifier, fk_source, harvest_date from metadata.records r left join metadata.record_sources s on r.identifier = s.record_id
+            WHERE r.identifier like :item or r.identifier like :splititem"""
         d1 = await fetch_data(query=qry1, values={'item': '%'+item, 'splititem': '%'+(item.split('/').pop() or 'random-non-matching-string') })
         
-        qry2 = """SELECT identifier,error from harvest.items WHERE identifier like :item or identifier like :splititem"""
+        qry2 = """SELECT identifier, error, source, insert_date from harvest.items WHERE identifier like :item or identifier like :splititem"""
         d2 = await fetch_data(query=qry2, values={'item': item, 'splititem': '%'+(item.split('/').pop() or 'random-non-matching-string')})
         
         qry3 = """select record_id from metadata.alternate_identifiers 
             where alt_identifier like :item or alt_identifier like :splititem"""
         d3 = await fetch_data(query=qry3, values={'item': '%'+item, 'splititem': '%'+(item.split('/').pop() or 'random-non-matching-string') })
         
-
         if len(d1) > 0:
-            resp.append(f"Record <a href=''{REC_URI}{d1[0][0]}>{d1[0][0]}</a> exists in Soilwise")
+            resp.append(f"Record <a href=''{REC_URI}{d1[0][0]}>{d1[0][0]}</a> exists in Soilwise, last harvest date {d1[0][2]}")
+            s = []
+            for r in d1:
+                s.append(r[1])
+            resp.append(f"Record harvested from {', '.join(s)}")
         elif len(d3) > 0:
             resp.append(f"""Record {item} seems a alternate identification (or version) 
-                        of the existing record <a href={REC_URI}{d3[0][0]}>{d3[0][0]}</a>""")
+                        of the existing record <a href='{REC_URI}{d3[0][0]}'>{d3[0][0]}</a>""")
         elif len(d2) > 0:
-            resp.append(f"Record {d2[0][0]} was harvested but did not make it to the final catalogue (yet)")
+            for r in d2:
+                resp.append(f"Record {r[0]} was harvested at {r[3]} from {r[2]} but did not make it to the final catalogue (yet), {r[1]}")
         else:
             resp.append("Record not (yet) available in Soilwise")    
             
@@ -306,35 +326,102 @@ async def status(item, request: Request):
 
     return resp
 
-@app.post("/pid/suggest")
+# helper function, check if record is already in soilwise
+async def check_record_in_soilwise(doi: str) -> bool:
+    qry = """SELECT identifier FROM metadata.records WHERE identifier = :doi"""
+    d = await fetch_data(query=qry, values={'doi': doi})
+    return len(d) > 0
+
+# helper funtion to retrieve client IP, handling proxies
+def get_ip(req):
+    forwarded = req.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    else:
+        ip = req.client.host
+    return ip
+
+@app.post("/pid/suggest/{doi:path}",
+          summary="Suggest a correction for a specific property of a record",
+          description="""Suggest a correction for a specific property of a record, providing your name, email, and comment. The suggestion will be reviewed by the SoilWise team.""")
+async def handle_form(
+    request: Request,
+    doi: str,
+    name: str = Form(...),
+    email: str = Form(...),
+    comment: str = Form(...),
+    property: str = Form(...),
+    value: str = Form(...)
+):
+
+    # Get IP address (handles proxies too)
+    ip = get_ip(request)
+
+    if not validate_email(email):
+        raise HTTPException(status_code=400, detail="Invalid email address") 
+
+    if not await check_record_in_soilwise(doi):
+        raise HTTPException(status_code=404, detail="Record not found in SoilWise")
+
+    query = """
+        INSERT INTO metadata.doi_prop_suggest (name, email, property, value, fk_record, comment, ip)
+        VALUES (:name, :email, :property, :value, :doi, :comment, :ip)
+    """
+
+    values = {
+        "name": name,
+        "email": email,
+        "property": property,
+        "value": value,
+        "doi": doi,
+        "comment": comment,
+        "ip": ip
+    }
+
+    try:
+        await database.execute(query=query, values=values)
+
+        return {"status": "success"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/pid/suggest",
+          summary="Suggest a new DOI for inclusion in SoilWise",
+          description="""Suggest a new DOI for inclusion in SoilWise, providing your name, email, and comment. The suggestion will be reviewed by the SoilWise team.""")
 async def handle_form(
     request: Request,
     name: str = Form(...),
     email: str = Form(...),
+    comment: str = Form(...),
     doi: str = Form(...)
 ):
     
     # Get IP address (handles proxies too)
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
-    else:
-        ip = request.client.host
+    ip = get_ip(request)
 
+    if not validate_email(email):
+        raise HTTPException(status_code=400, detail="Invalid email address") 
+
+    if await check_record_in_soilwise(doi):
+        raise HTTPException(status_code=400, detail="Record is already available in soilwise")
+
+    print(f"New DOI suggestion received: {doi}")
 
     is_valid = await validate_doi(doi)
     if not is_valid:
         raise HTTPException(status_code=400, detail="Invalid DOI")
 
     query = """
-        INSERT INTO harvest.doi_suggest (name, email, doi, ip)
-        VALUES (:name, :email, :doi, :ip)
+        INSERT INTO harvest.doi_suggest (name, email, doi, comment, ip)
+        VALUES (:name, :email, :doi, :comment, :ip)
     """
 
     values = {
         "name": name,
         "email": email,
         "doi": doi,
+        "comment": comment,
         "ip": ip
     }
 
@@ -348,7 +435,10 @@ async def handle_form(
 
 
 ## version history 
-@app.get('/history/{item:path}', response_model=List[RecordResponse])
+@app.get('/history/{item:path}', 
+         response_model=List[RecordResponse],
+         summary="Retrieve the version history of a record in SoilWise",
+         description="Retrieve the version history of a record in SoilWise, including all previous versions and their details.")
 async def get_record_history(item: str):
     query = f"""SELECT identifier, itemtype, 
         resultobject, insert_date as date, title, source, project 
@@ -358,7 +448,10 @@ async def get_record_history(item: str):
     return data
 
 ## version history 
-@app.get('/augments/{item:path}', response_model=List[AugmentResponse])
+@app.get('/augments/{item:path}', 
+         response_model=List[AugmentResponse],
+         summary="Retrieve all augmentations made to a record in SoilWise",
+         description="Retrieve all augmentations made to a record in SoilWise, including their details and timestamps.")
 async def get_record_augments(item: str):
     query = f"""SELECT distinct on (a.property) a.property,
                     a.value as target, 
@@ -427,7 +520,9 @@ class trans(BaseModel):
     source: str
     context: str
 
-@app.post('/callback')
+@app.post('/callback', 
+          summary="Handle translation callback",
+          description="Handle the callback from the translation service, updating the translation status in the database.")
 async def callback(requestId: Annotated[str, Form(alias="request-id",serialization_alias="request-id")], 
              targetLanguage: Annotated[str, Form(alias="target-language",serialization_alias="target-language")], 
              translatedText: Annotated[str, Form(alias="translated-text",serialization_alias="translated-text")]):
