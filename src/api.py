@@ -210,24 +210,42 @@ async def validate_doi(doi: str) -> bool:
          summary="Check the status/availability of a DOI in relation to SoilWise selection criteria",
          description="Check the status of a DOI in relation to SoilWise selection criteria, including its presence in SoilWise, OpenAire, and its validity as a DOI.")
 async def status(item, request: Request):
+    if 'doi.org' in item:
+        item = item.split('doi.org/').pop()
+    elif 'handle.net' in item:
+        item = item.split('handle.net/').pop()
+
     resp = [f"Test item {quote(item)}"]
     ip = request.client.host
     if item:
         
         # is id in soilwise?
         qry1 = """SELECT identifier, fk_source, harvest_date from metadata.records r left join metadata.record_sources s on r.identifier = s.record_id
-            WHERE r.identifier like :item or r.identifier like :splititem"""
-        d1 = await fetch_data(query=qry1, values={'item': '%'+item, 'splititem': '%'+(item.split('/').pop() or 'random-non-matching-string') })
+            WHERE r.identifier = :item"""
+        d1 = await fetch_data(query=qry1, values={'item': item,  })
         
-        qry2 = """SELECT identifier, error, source, insert_date from harvest.items WHERE identifier like :item or identifier like :splititem"""
-        d2 = await fetch_data(query=qry2, values={'item': item, 'splititem': '%'+(item.split('/').pop() or 'random-non-matching-string')})
+        qry2 = """SELECT identifier, error, source, insert_date from harvest.items WHERE identifier = :item or identifier like :_item"""
+        d2 = await fetch_data(query=qry2, values={'item': item, '_item': '%'+item})
         
         qry3 = """select record_id from metadata.alternate_identifiers 
-            where alt_identifier like :item or alt_identifier like :splititem"""
-        d3 = await fetch_data(query=qry3, values={'item': '%'+item, 'splititem': '%'+(item.split('/').pop() or 'random-non-matching-string') })
-        
-        if len(d1) > 0:
-            resp.append(f"Record <a href=''{REC_URI}{d1[0][0]}>{d1[0][0]}</a> exists in Soilwise, last harvest date {d1[0][2]}")
+            where alt_identifier = :item or alt_identifier like :_item"""
+        d3 = await fetch_data(query=qry3, values={'item': item, '_item': '%'+item })
+
+        hasSOLR = None
+        ttl = ''
+        try: 
+            url = "https://catalogue.soilwise-he.eu/search-api/solr/search"
+            response = requests.post(url, data={ "query": "identifier:"+item })
+            if response.json()['response']['numFound'] > 0:
+                hasSOLR = True 
+                ttl = response.json()['response']['docs'][0]['title']
+        except Exception as e:
+            print('error retrieve solr', item, e) 
+    
+        if hasSOLR == True:
+            resp.append(f"Record <a href='https://catalogue.soilwise-he.eu/resource/{item.replace('/','%2F')}'>{ttl}</a> exists in Soilwise catalogue")
+        elif len(d1) > 0:
+            resp.append(f"Record exists in Soilwise database, last harvest date {d1[0][2]}")
             s = []
             for r in d1:
                 s.append(r[1])
@@ -240,7 +258,7 @@ async def status(item, request: Request):
                 resp.append(f"Record {r[0]} was harvested at {r[3]} from {r[2]} but did not make it to the final catalogue (yet), {r[1]}")
         else:
             resp.append("Record not (yet) available in Soilwise")    
-            
+
             # is id in openaire?
             req = f"https://api.openaire.eu/graph/v2/researchProducts?pid={item.split('doi.org/').pop()}"
             try:
