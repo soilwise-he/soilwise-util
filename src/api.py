@@ -18,11 +18,8 @@ from urllib.parse import quote_plus, quote
 load_dotenv()
 
 # Database connection setup
+print(f'Connecting to {os.environ.get('POSTGRES_USER')}:******@{os.environ.get('POSTGRES_HOST')}:{os.environ.get('POSTGRES_PORT')}/{os.environ.get('POSTGRES_DB')}')
 DATABASE_URL = f"postgresql://{os.environ.get('POSTGRES_USER')}:{os.environ.get('POSTGRES_PASSWORD')}@{os.environ.get('POSTGRES_HOST')}:{os.environ.get('POSTGRES_PORT')}/{os.environ.get('POSTGRES_DB')}"
-
-# if os.environ.get("POSTGRES_SCHEMA"):
-#    unfortunately this does not work
-#    DATABASE_URL += f"?options=-c+search_path%3D{quote_plus(os.environ.get('POSTGRES_SCHEMA'))}"
 
 database = Database(DATABASE_URL)
 schema = 'harvest'
