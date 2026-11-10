@@ -45,13 +45,11 @@ API to request the harvested history for a record.
 
 API to request augmentations which have been applied to a record
 
-## Installation
+# Installation
 
 A database connection needs to be set up. You can configure the database connection in a .env file (or set environment variables).
 
 ```
-OGCAPI_URL=https://example.com
-OGCAPI_COLLECTION=example
 POSTGRES_HOST=example.com
 POSTGRES_PORT=5432
 POSTGRES_DB=postgres
@@ -64,8 +62,6 @@ Install requirements
 
 ```
 pip3 install -r requirements.txt
-```
-
 ```
 
 To run the API locally 
@@ -96,15 +92,24 @@ You can set `ROOTPATH` env var to run the api at a path (default is at root)
 export ROOTPATH=/feeds
 ```
 
+The validate service requires the rec_uri and root_url to be provided via these parameters:
+
+```
+export REC_URI=https://repository.soilwise-he.eu/cat/collections/metadata:main/items/
+export ROOT_URL=https://api.soilwise.wetransform.eu/util/
+```
 
 Navigate to /docs to see interactive documentation (swagger)
 
+## Health check
 
+A health check endpoint is available at `/health/ready` to understand if the api is running 
+and can connect to the database.
 
 ## CI/CD
 
 A CI/CD configuration file is provided in order to create an automated chronological pipeline.
-It is necessary to define the secrets context using GitLab secrets in order to connect to the database.
+It is necessary to define the secrets context using K8S secrets in order to connect to the database.
 
 ---
 
