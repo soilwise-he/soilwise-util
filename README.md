@@ -1,66 +1,31 @@
-
-
 # SOILWISE Util
 
 API with various Util Methods:
 
-- [Feeds](#feeds-api); let's users browse through various soil mission project feeds
-- [Translate callback](#translate-callback); a callback endpoint for EU translation service
-- [Record validate](#record-validation); an api to validate the status of a record
-- [Version hisotry](#version-history); API to retrieve previous versions of records 
+- [Projects](#projects); retrieve relevant projects of ESDAC
+- [Feeds](#feeds); let's users browse through various soil mission project feeds
+- [Record validate](#record-validation); an api to validate the status of a record or suggest a record to be included
+- [Version history](#version-history); API to retrieve previous versions of records
+- [Augmentations](#augmentations); API to retrieve augmentations applied to a record
 
 And [installation instructions](#installation).
 
+## Projects
 
-## Feeds API
+This api returns the list of EU projects which has been extracted from esdac and soil mission as being 'relevant to soil'. These projects are used to build a filter against OpenAire.
+
+## Feeds 
 
 News feeds of the soil mission projects are harvested into a database, this API enables to browse through the feeds. Feeds are ordered by date.
 
 Use params `limit` and `offset` to paginate through the results
 
-## Translate callback
-
-Some records arrive in a local language, we aim to capture at least main properties for the record in english: title, abstract, keywords, lineage, usage constraints. We use EU translate service, which returns a translated string to this API endpoint.
-
-Features
-- the EU translation service is used, this service returns a asynchronous response to an API endpoint (callback)
-- the callback populates the database, next time the translation is available
-- make sure that frontend indicates if a string has been machine translated, with option to flag as inappropriate
-
-EU API documentation <https://language-tools.ec.europa.eu/>
-
-A token for the service is available, ask Nick, RobK or Paul if you need it.
-
-```mermaid
-classDiagram
-    Translations 
- 
-    class Translations{
-        source
-        target
-        lang_source # has value 'LD' if lang is not known
-        lang_target
-        ticket
-        date_inserted
-        date_updated
-    }
-
-```
-
-### Error codes
-
-Error codes of the EU tranlate service start with -, following error codes are of interest
-
-| code   | description |
-| ---    | --- | 
-| -20001 | Invalid source language | 
-| -20003 | Invalid target language(s) | 
-| -20021 | Text to translate too long | 
-| -20028 | Concurrency quota exceeded | 
-| -20029 | Document format not supported | 
-| -20049 | Language can not be detected | 
-
 ## Record validation
+
+An api to validate the status of a record or suggest a record to be included.
+A series of validation rules is applied to identify if/why a record is (not) included.
+
+### Tests
 
 Runs some tests on arbitrary DOI
 
@@ -74,7 +39,11 @@ Tests:
 '
 ## Version history
 
+API to request the harvested history for a record.
 
+## Augmentations
+
+API to request augmentations which have been applied to a record
 
 ## Installation
 
