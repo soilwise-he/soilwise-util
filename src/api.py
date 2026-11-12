@@ -19,7 +19,8 @@ load_dotenv()
 
 # Database connection setup
 print(f'Connecting to {os.environ.get('POSTGRES_USER')}:******@{os.environ.get('POSTGRES_HOST')}:{os.environ.get('POSTGRES_PORT')}/{os.environ.get('POSTGRES_DB')}')
-DATABASE_URL = f"postgresql://{os.environ.get('POSTGRES_USER')}:{os.environ.get('POSTGRES_PASSWORD')}@{os.environ.get('POSTGRES_HOST')}:{os.environ.get('POSTGRES_PORT')}/{os.environ.get('POSTGRES_DB')}"
+# user and password are percent-encoded so characters like '#', '?', '@' or ':' don't break URL parsing
+DATABASE_URL = f"postgresql://{quote(os.environ.get('POSTGRES_USER', ''), safe='')}:{quote(os.environ.get('POSTGRES_PASSWORD', ''), safe='')}@{os.environ.get('POSTGRES_HOST')}:{os.environ.get('POSTGRES_PORT')}/{os.environ.get('POSTGRES_DB')}"
 
 database = Database(DATABASE_URL)
 schema = 'harvest'
