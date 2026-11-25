@@ -3,15 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from dotenv import load_dotenv
 from databases import Database
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Literal
 from typing_extensions import Annotated
 from pydantic import BaseModel
 from datetime import datetime
-import asyncpg, requests, asyncio
+import asyncpg, requests, asyncio, json
 from requests.auth import HTTPDigestAuth
 import logging
 import os, httpx, re
-from urllib.parse import quote_plus, quote
+from urllib.parse import quote_plus, quote, unquote
 
 
 # Load environment variables from .env file
@@ -27,8 +27,8 @@ schema = 'harvest'
 if os.environ.get("POSTGRES_SCHEMA"):
     schema = os.environ.get("POSTGRES_SCHEMA")
 
-REC_URI = os.environ.get("REC_URI",'https://repository.soilwise-he.eu/cat/collections/metadata:main/items/')
-ROOT_URL = os.environ.get("ROOT_URL",'https://api.soilwise.wetransform.eu/util/')
+REC_URI = os.environ.get("REC_URI",'https://catalogue.soilwise-he.eu/resource?id=')
+ROOT_URL = os.environ.get("ROOT_URL",'https://api.soilwise-he.eu/util/')
 rootpath = os.environ.get("ROOTPATH") or "/"
 
 # FastAPI app instance
@@ -211,14 +211,25 @@ async def status(item, request: Request):
         item = item.split('doi.org/').pop()
     elif 'handle.net' in item:
         item = item.split('handle.net/').pop()
+    elif 'catalogue.soilwise-he.eu/resource?id=' in item:
+        item = unquote(item.split('?id=').pop())
+    elif 'api.soilwise-he.eu/records/collections/metadata:main/items/' in item:
+        item = item.split('items/').pop()
+    elif 'zenodo.org' in item:
+        item = '10.5281/zenodo.' + item.split('records/').pop()
+    elif 'data.europa.eu' in item:
+        item = item.split('datasets/').pop()
 
     resp = [f"Test item {quote(item)}"]
     ip = request.client.host
     if item:
         
         # is id in soilwise?
-        qry1 = """SELECT identifier, fk_source, harvest_date from metadata.records r left join metadata.record_sources s on r.identifier = s.record_id
-            WHERE r.identifier = :item"""
+        qry1 = """SELECT identifier, s.fk_source, harvest_date, p.project 
+                  from metadata.records r 
+                  left join metadata.record_sources s on r.identifier = s.record_id
+                  left join metadata.record_in_project p on r.identifier = p.record_id
+                  WHERE r.identifier = :item"""
         d1 = await fetch_data(query=qry1, values={'item': item,  })
         
         qry2 = """SELECT identifier, error, source, insert_date from harvest.items WHERE identifier = :item or identifier like :_item"""
@@ -230,26 +241,39 @@ async def status(item, request: Request):
 
         hasSOLR = None
         ttl = ''
+        src = ''
+        prj = ''
+        dh = ''
         try: 
             url = "https://catalogue.soilwise-he.eu/search-api/solr/search"
-            response = requests.post(url, data={ "query": "identifier:"+item })
-            if response.json()['response']['numFound'] > 0:
+            response = requests.post(url, json={ "query": "identifier:"+item }, headers={"Content-Type": "application/json"})
+            if response.json().get('response',{}).get('numFound',0) > 0:
                 hasSOLR = True 
-                ttl = response.json()['response']['docs'][0]['title']
+                ttl = response.json().get('response',{}).get('docs',[{}])[0].get('title')
+                src = response.json().get('response',{}).get('docs',[{}])[0].get('sources')
+                dh = response.json().get('response',{}).get('docs',[{}])[0].get('date_harvest','').split('T')[0]
+                prjs = response.json().get('response',{}).get('docs',[{}])[0].get('projects')
+                if prjs:
+                    prj = ", ".join([json.loads(p).get('acronym') for p in prjs])
         except Exception as e:
-            print('error retrieve solr', item, e) 
+            print('error retrieve solr', item, str(e)) 
     
         if hasSOLR == True:
-            resp.append(f"Record <a href='https://catalogue.soilwise-he.eu/resource/{item.replace('/','%2F')}'>{ttl}</a> exists in Soilwise catalogue")
+            resp.append(f"Record <a href='{REC_URI}{quote(item)}'>{ttl}</a> exists in Soilwise catalogue (SOLR), date harvest {dh}")
+            if src:
+                resp.append(f"Record from source {', '.join(src)}.")
+            if prj:
+                resp.append(f"Record from project {prj}.")
         elif len(d1) > 0:
-            resp.append(f"Record exists in Soilwise database, last harvest date {d1[0][2]}")
-            s = []
-            for r in d1:
-                s.append(r[1])
-            resp.append(f"Record harvested from {', '.join(s)}")
+            resp.append(f"Record <a href='{item}'>{item}</a> exists in Soilwise database, it may appear in Catalogue soon, else notify the team. Last harvest date {d1[0][2]}.")
+            if d1[0][3]:
+               resp.append(f"Record from project {d1[0][3]}.")
+            else:
+               resp.append(f"Record not related to a selected project.")
+            resp.append(f"Record harvested from {', '.join([r[1] for r in d1])}")
         elif len(d3) > 0:
             resp.append(f"""Record {item} seems a alternate identification (or version) 
-                        of the existing record <a href='{REC_URI}{d3[0][0]}'>{d3[0][0]}</a>""")
+                        of the existing record <a href='{REC_URI}{quote(d3[0][0])}'>{d3[0][0]}</a>""")
         elif len(d2) > 0:
             for r in d2:
                 resp.append(f"Record {r[0]} was harvested at {r[3]} from {r[2]} but did not make it to the final catalogue (yet), {r[1]}")
@@ -271,7 +295,7 @@ async def status(item, request: Request):
                                 'funder':p.get('funder','')})  
                         
                     if len(prj) == 0:
-                        resp.append("""- Record is in OpenAire, but no project reference has been found. 
+                        resp.append("""Record is in OpenAire, but no project reference has been found. 
                         Contact the authors to update their funding reference.""")
                     else:
                         # check if grantnr is in list
@@ -310,10 +334,9 @@ async def status(item, request: Request):
 
             except Exception as e: 
                 resp.append(f"Error while processing DOI, {e}")
-            
+
             resp.append(f"""Please notify the SoilWise team if you think this resource should
                         be included in SoilWise.""")
-
 
             # is id in data.europa.eu?  
             # try:
@@ -364,9 +387,11 @@ async def handle_form(
     doi: str,
     name: str = Form(...),
     email: str = Form(...),
-    comment: str = Form(...),
-    property: str = Form(...),
-    value: str = Form(...)
+    comment: str | None = Form(None),
+    consent: bool = Form(...),
+    modus: Literal["update", "remove"] = Form(...),
+    property: str | None = Form(None),
+    value: str | None = Form(None)
 ):
 
     # Get IP address (handles proxies too)
@@ -379,8 +404,8 @@ async def handle_form(
         raise HTTPException(status_code=404, detail="Record not found in SoilWise")
 
     query = """
-        INSERT INTO metadata.doi_prop_suggest (name, email, property, value, fk_record, comment, ip)
-        VALUES (:name, :email, :property, :value, :doi, :comment, :ip)
+        INSERT INTO metadata.doi_prop_suggest (name, email, property, value, fk_record, comment, consent, modus, ip)
+        VALUES (:name, :email, :property, :value, :doi, :comment, :consent, :modus :ip)
     """
 
     values = {
@@ -390,6 +415,8 @@ async def handle_form(
         "value": value,
         "doi": doi,
         "comment": comment,
+        "consent": consent,
+        "modus": modus,
         "ip": ip
     }
 
@@ -459,7 +486,7 @@ async def get_record_history(item: str):
         resultobject, insert_date as date, title, source, project 
         FROM harvest.items where identifier=:id"""
     data = await fetch_data(query=query,values={ "id": item})
-    print('dt',len(data))
+
     return data
 
 ## version history 
